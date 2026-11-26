@@ -1,0 +1,145 @@
+---
+title: "Plant species richness and foliage cover across Pilbara monitoring plots"
+subtitle: "A desktop assessment of TERN AusPlots vegetation surveys in Western Australia"
+output:
+  html_document:
+    toc: true
+    code_folding: hide
+    self_contained: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=FALSE, error=FALSE, fig.width=8, fig.height=5, dpi=120)
+d <- readRDS("data/pilbara.rds")
+a <- d$info
+v <- d$vouchers
+p <- d$points
+a$date <- as.Date(substr(a$visit_start_date, 1, 10))
+stopifnot(!anyDuplicated(a$site_unique), !anyNA(a$date),
+          all(v$site_unique %in% a$site_unique), all(p$site_unique %in% a$site_unique))
+valid <- function(x) !is.na(x) & !tolower(trimws(x)) %in% c("", "na", "n/a", "indeterminate")
+resolved <- function(x) x$rank %in% c("Species","Subspecies","Varietas") &
+  valid(x$standardised_name) & valid(x$genus_species)
+n_by_visit <- function(ids) tabulate(match(ids, a$site_unique), nbins=nrow(a))
+vnames <- unique(v[resolved(v), c("site_unique","genus_species")])
+a$richness <- n_by_visit(vnames$site_unique)
+points <- unique(p[valid(p$hits_unique), c("site_unique","hits_unique")])
+a$positions <- n_by_visit(points$site_unique)
+live <- p$in_canopy_sky %in% FALSE & p$dead %in% FALSE
+hits <- unique(p[live & resolved(p) & valid(p$hits_unique),
+                 c("site_unique","hits_unique","genus_species")])
+a$usable <- a$richness > 0 & a$positions > 0 & a$site_unique %in% hits$site_unique
+a$vouchers <- n_by_visit(v$site_unique)
+a$voucher_named <- n_by_visit(v$site_unique[valid(v$standardised_name)])
+a$voucher_herbarium <- n_by_visit(v$site_unique[valid(v$herbarium_determination)])
+a$points_named <- n_by_visit(p$site_unique[valid(p$standardised_name)])
+a$point_herbarium <- n_by_visit(p$site_unique[valid(p$herbarium_determination)])
+a <- a[order(a$visit_start_date, a$site_unique, decreasing=TRUE), ]
+latest <- a[!duplicated(a$site_location_name), ]
+b <- a[a$usable, ]
+b <- b[!duplicated(b$site_location_name), ]
+b$earlier <- !b$site_unique %in% latest$site_unique
+stopifnot(nrow(b)>0, !anyDuplicated(b$site_location_name))
+hits <- hits[hits$site_unique %in% b$site_unique, ]
+counts <- as.matrix(table(factor(hits$site_unique, levels=b$site_unique), hits$genus_species))
+cover <- sweep(counts, 1, b$positions, "/")*100
+stopifnot(all(cover>=0 & cover<=100), identical(rownames(cover),as.character(b$site_unique)))
+ranking <- function(m) {
+  ans <- data.frame(Species=colnames(m), Mean=colMeans(m), Plots=colSums(m>0))
+  ans[order(-ans$Mean,ans$Species), ]
+}
+top <- head(ranking(cover),8)
+recent <- b[!b$earlier, ]
+recent_top <- ranking(cover[!b$earlier,,drop=FALSE])
+dropped <- latest[!latest$usable, ]
+fmt <- function(x) formatC(x, digits=2, format="f")
+```
+
+## Findings
+
+The analysis covers **`r nrow(b)` plots**, with one visit per plot between **`r min(b$date)` and `r max(b$date)`**. Vouchers recorded **`r min(b$richness)` to `r max(b$richness)` species-level taxa per plot** (median `r median(b$richness)`). *`r top$Species[1]`* had the highest mean live projected foliage cover (`r fmt(top$Mean[1])`%) and was recorded by live point intercept at `r top$Plots[1]` plots.
+
+## Survey selection and methods
+
+The WA inventory contained `r length(unique(d$wa$site_location_name))` plots and `r length(unique(d$wa$site_unique))` visits. The Pilbara subset contained `r nrow(a)` visits to `r nrow(latest)` plots. Recorded plot dimensions were `r paste(unique(b$plot_dimensions),collapse=", ")`. We selected the latest visit per plot with both a species-resolved voucher and a species-resolved live foliage hit. This selects for identifiable vegetation and can omit genuinely sparse or bare sites. Review the visit audit before extending this rule to other regions.
+
+We counted distinct species-level names in the voucher table. We retained records ranked as species, subspecies or variety, pooled infraspecific names under the supplied species name, and retained recognised phrase names at species rank. We excluded missing or placeholder names and records identified only to genus or family. Richness describes the species recorded by this method.
+
+For each species and visit, we divided the number of distinct point positions with a live foliage hit by the number of distinct surveyed positions, including substrate positions. We required explicit false values for both dead material and within-canopy sky. Multiple contacts with the same species at one position counted once. Plot denominators ranged from `r min(b$positions)` to `r max(b$positions)` positions. Each plot received equal weight in the mean. A species with no eligible hit at an included plot contributed zero recorded cover.
+
+## Survey footprint
+
+```{r map, fig.cap="Figure 1. Locations of selected plots. Colours identify plots represented by an earlier usable visit."}
+pal <- c("#17696A","#BA552F")
+plot(b$longitude,b$latitude,asp=1/cos(mean(b$latitude)*pi/180),
+     xlab="Longitude (degrees east)",ylab="Latitude (degrees north)",
+     pch=21,bg=pal[1L+b$earlier],col="white",cex=1.35)
+legend("topright",c("Latest visit","Earlier usable visit"),pch=21,
+       pt.bg=pal,bty="n",cex=.8)
+```
+
+## Variation among plots
+
+```{r richness, fig.height=7.7, fig.cap="Figure 2. Voucher-based richness by plot, ordered from lowest to highest. The vertical line marks the median."}
+o <- order(b$richness,b$site_location_name)
+par(mar=c(4,8,1,1))
+plot(b$richness[o],seq_along(o),yaxt="n",ylab="",xlab="Recorded species-level taxa",
+     pch=19,col=pal[1L+b$earlier[o]],las=1)
+axis(2,seq_along(o),b$site_location_name[o],las=2,cex.axis=.68)
+abline(v=median(b$richness),lty=2,col="grey50")
+```
+
+## Dominant species
+
+```{r dominance, fig.cap="Figure 3. Eight species with the highest mean live projected foliage cover across selected plots."}
+par(mar=c(4,13,1,1))
+barplot(rev(top$Mean),names.arg=rev(top$Species),horiz=TRUE,las=1,
+        col=pal[1],border=NA,xlab="Mean live foliage cover (%)",cex.names=.8)
+knitr::kable(top,row.names=FALSE,digits=2,
+             col.names=c("Species","Mean cover (%)","Plots with a live hit"))
+```
+
+## Effect of survey selection
+
+Both raw tables contained records for `r sum(dropped$vouchers>0 & dropped$site_unique %in% p$site_unique)` of the `r nrow(dropped)` excluded latest visits. Of these excluded visits, `r sum(dropped$voucher_named==0 & dropped$points_named==0)` lacked usable standardised names in both tables, and `r sum(dropped$voucher_herbarium>0 & dropped$point_herbarium>0)` retained herbarium determinations in both. Missing standardisation limits species-level comparisons even when field observations exist.
+
+```{r comparison}
+compare <- function(x, rank, rule) {
+  data.frame(Rule=rule, Plots=nrow(x), From=min(x$date), To=max(x$date),
+             Median=median(x$richness), Mean=round(mean(x$richness),1),
+             Leading_species=rank$Species[1], Cover_pct=round(rank$Mean[1],2))
+}
+knitr::kable(rbind(compare(recent,recent_top,"Usable latest visits only"),
+                   compare(b,top,"Latest usable visit per plot")),row.names=FALSE)
+```
+
+The broader selection retained `r nrow(recent)` latest visits and added `r sum(b$earlier)` plots from earlier surveys. Differences between the rows reflect plot inclusion and survey timing together. These summaries describe surveyed locations during the selected period. They cannot establish regional trends, disturbance effects or present-day condition.
+
+## Follow-up survey priorities
+
+The first two species differed by only `r fmt(top$Mean[1]-top$Mean[2])` percentage points in mean cover. Their live hits occurred in `r top$Plots[1]` and `r top$Plots[2]` of the `r nrow(b)` plots respectively. High mean cover can therefore reflect substantial cover at a subset of locations. The ranking alone gives little guidance on which species will dominate a newly surveyed plot.
+
+Prioritise the `r nrow(dropped)` plots with unusable latest visits for a review of voucher identifications. Cross-check herbarium determinations against vouchers and an accepted taxonomic reference before pooling them with standardised names. Where a current baseline is required, revisit the older plots in comparable seasonal conditions and repeat both voucher collection and point intercept. Compare plots of contrasting richness within similar landforms before attributing differences to disturbance.
+
+## Visit audit and reproducibility
+
+Each row below represents one visit. Standardised-name counts refer to raw records. Eligibility requires species-level records and the foliage filters described above.
+
+```{r audit}
+audit <- a[,c("site_location_name","site_unique","date","vouchers","voucher_named",
+             "voucher_herbarium","points_named","point_herbarium","positions","usable")]
+audit$selected <- audit$site_unique %in% b$site_unique
+knitr::kable(audit[order(audit$site_location_name,audit$date), ],row.names=FALSE)
+dir.create("tables", showWarnings=FALSE)
+write.csv(audit,"tables/visit_audit.csv",row.names=FALSE)
+write.csv(b,"tables/selected_plots.csv",row.names=FALSE)
+write.csv(ranking(cover),"tables/species_cover.csv",row.names=FALSE)
+write.csv(cover,"tables/plot_by_species_cover.csv")
+```
+
+Source: TERN (2026), *AusPlots ecosystem surveillance monitoring dataset*, accessed 20 November 2026 through [ausplotsR](https://github.com/ternaustralia/ausplotsR). The bundled data snapshot contains the fields used here. Render this document from the folder containing the data directory. The companion download script can refresh the snapshot separately.
+
+```{r environment}
+sessionInfo()
+```
+
